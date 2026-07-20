@@ -122,10 +122,29 @@ pub fn run() {
                 timer: Mutex::new(timer::TimerManager::new()),
             });
 
+            // Remove the dock icon — run as a tray-only (agent) app.
+            // NSApplicationActivationPolicyAccessory (1) = no dock icon,
+            // but windows still work and can be shown/focused via the tray.
+            // This works in both dev mode and the production bundle.
+            #[cfg(target_os = "macos")]
+            {
+                use objc2::msg_send;
+                use objc2::runtime::{AnyClass, NSObject};
+                unsafe {
+                    if let Some(cls) = AnyClass::get(c"NSApplication") {
+                        let shared_app: *mut NSObject = msg_send![cls, sharedApplication];
+                        if !shared_app.is_null() {
+                            let _: () = msg_send![shared_app, setActivationPolicy: 1i64];
+                        }
+                    }
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Save window position before hiding
                 let app = window.app_handle();
                 if let Ok(pos) = window.outer_position() {
                     let settings = settings::load_settings(&app);
@@ -136,6 +155,9 @@ pub fn run() {
                     };
                     settings::save_settings(&app, &updated);
                 }
+                // Hide to tray instead of quitting
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![

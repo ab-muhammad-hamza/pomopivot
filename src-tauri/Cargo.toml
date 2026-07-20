@@ -1,5 +1,5 @@
 [package]
-name = "app"
+name = "pomopivot"
 version = "0.1.0"
 description = "PomoPivot - A cross-platform timer application"
 authors = ["you"]

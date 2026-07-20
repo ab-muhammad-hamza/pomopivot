@@ -74,8 +74,23 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             {
                 let app = tray.app_handle();
                 if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
                     let _ = window.show();
                     let _ = window.set_focus();
+                    // Accessory-policy apps need explicit activation to come to front
+                    #[cfg(target_os = "macos")]
+                    {
+                        use objc2::msg_send;
+                        use objc2::runtime::{AnyClass, NSObject};
+                        unsafe {
+                            if let Some(cls) = AnyClass::get(c"NSApplication") {
+                                let ns_app: *mut NSObject = msg_send![cls, sharedApplication];
+                                if !ns_app.is_null() {
+                                    let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+                                }
+                            }
+                        }
+                    }
                 }
             }
         })
