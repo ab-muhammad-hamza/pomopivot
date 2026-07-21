@@ -122,6 +122,10 @@ function App() {
               openAtLogin={openAtLogin}
               minimizeToTray={minimizeToTray}
               onBack={() => setShowSettings(false)}
+              onSettingChange={(key, value) => {
+                if (key === "open_at_login") setOpenAtLogin(value);
+                if (key === "minimize_to_tray") setMinimizeToTray(value);
+              }}
             />
           )}
 

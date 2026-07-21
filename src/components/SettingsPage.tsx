@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface PersistedSettings {
   open_at_login: boolean;
@@ -11,12 +11,24 @@ interface SettingsPageProps {
   openAtLogin: boolean;
   minimizeToTray: boolean;
   onBack: () => void;
+  /** Called immediately when any setting changes so parent state stays in sync */
+  onSettingChange: (key: "open_at_login" | "minimize_to_tray", value: boolean) => void;
 }
 
-export function SettingsPage({ openAtLogin, minimizeToTray, onBack }: SettingsPageProps) {
+export function SettingsPage({ openAtLogin, minimizeToTray, onBack, onSettingChange }: SettingsPageProps) {
   const [loginEnabled, setLoginEnabled] = useState(openAtLogin);
   const [minimizeEnabled, setMinimizeEnabled] = useState(minimizeToTray);
   const [saving, setSaving] = useState(false);
+  const [savedKey, setSavedKey] = useState<string | null>(null);
+
+  // Keep local state in sync if parent props change (e.g. on first load)
+  useEffect(() => { setLoginEnabled(openAtLogin); }, [openAtLogin]);
+  useEffect(() => { setMinimizeEnabled(minimizeToTray); }, [minimizeToTray]);
+
+  const flashSaved = (key: string) => {
+    setSavedKey(key);
+    setTimeout(() => setSavedKey(null), 2000);
+  };
 
   const handleLoginToggle = async () => {
     const next = !loginEnabled;
@@ -25,6 +37,8 @@ export function SettingsPage({ openAtLogin, minimizeToTray, onBack }: SettingsPa
     await invoke("set_autostart", { enabled: next });
     const existing = await invoke<PersistedSettings>("load_settings");
     await invoke("save_settings", { settings: { ...existing, open_at_login: next } });
+    onSettingChange("open_at_login", next);
+    flashSaved("login");
     setSaving(false);
   };
 
@@ -34,19 +48,25 @@ export function SettingsPage({ openAtLogin, minimizeToTray, onBack }: SettingsPa
     setSaving(true);
     const existing = await invoke<PersistedSettings>("load_settings");
     await invoke("save_settings", { settings: { ...existing, minimize_to_tray: next } });
+    onSettingChange("minimize_to_tray", next);
+    flashSaved("minimize");
     setSaving(false);
   };
 
   function ToggleRow({
+    id,
     title,
     description,
     enabled,
     onToggle,
+    saved,
   }: {
+    id: string;
     title: string;
     description: string;
     enabled: boolean;
     onToggle: () => void;
+    saved: boolean;
   }) {
     return (
       <div
@@ -57,19 +77,39 @@ export function SettingsPage({ openAtLogin, minimizeToTray, onBack }: SettingsPa
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          transition: "box-shadow 0.2s",
+          boxShadow: saved ? "0 0 0 1.5px var(--accent-success)" : "none",
         }}
       >
         <div style={{ flex: 1, minWidth: 0, paddingRight: 16 }}>
-          <p style={{ margin: 0, fontSize: 15, fontWeight: 500, color: "var(--text-primary)" }}>
-            {title}
-          </p>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <p style={{ margin: 0, fontSize: 15, fontWeight: 500, color: "var(--text-primary)" }}>
+              {title}
+            </p>
+            {/* Inline "Saved" badge */}
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: "var(--accent-success)",
+                opacity: saved ? 1 : 0,
+                transform: saved ? "translateY(0)" : "translateY(-4px)",
+                transition: "opacity 0.25s, transform 0.25s",
+                letterSpacing: "0.03em",
+              }}
+            >
+              ✓ Saved
+            </span>
+          </div>
           <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--text-muted)", lineHeight: 1.4 }}>
             {description}
           </p>
         </div>
         <button
+          id={id}
           onClick={onToggle}
           disabled={saving}
+          aria-pressed={enabled}
           style={{
             width: 44,
             height: 24,
@@ -132,17 +172,21 @@ export function SettingsPage({ openAtLogin, minimizeToTray, onBack }: SettingsPa
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <ToggleRow
+          id="toggle-open-at-login"
           title="Open at Login"
           description="Launch PomoPivot automatically when you log in"
           enabled={loginEnabled}
           onToggle={handleLoginToggle}
+          saved={savedKey === "login"}
         />
 
         <ToggleRow
+          id="toggle-minimize-to-tray"
           title="Minimize to Tray"
           description="Keep running in the background when minimized"
           enabled={minimizeEnabled}
           onToggle={handleMinimizeToggle}
+          saved={savedKey === "minimize"}
         />
       </div>
     </div>
