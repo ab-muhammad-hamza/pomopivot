@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TitleBar } from "./components/TitleBar";
 import { ModeToggle } from "./components/ModeToggle";
 import { SimpleInput } from "./components/SimpleInput";
@@ -10,7 +11,6 @@ import { CompletionOverlay } from "./components/CompletionOverlay";
 import { MessageEditorDialog } from "./components/MessageEditorDialog";
 import { SettingsPage } from "./components/SettingsPage";
 import { useTimer } from "./hooks/useTimer";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TimerMode, PomodoroPhase, type PersistedSettings } from "./types";
 import "./App.css";
 
@@ -56,21 +56,31 @@ function App() {
     await timer.start();
   }, [timer]);
 
+  // Restore window to its pre-overlay size/position
+  const restoreWindow = useCallback(async () => {
+    try {
+      await invoke("exit_completion_view");
+    } catch (e) {
+      console.error("exit_completion_view failed:", e);
+    }
+  }, []);
+
   const handleContinue = useCallback(async () => {
-    await getCurrentWindow().setFullscreen(false);
+    // Always hide overlay first — don't let restoreWindow errors block this
+    setShowOverlay(false);
+    await restoreWindow();
     if (timer.isPomodoroMode) {
       timer.startNextPhase();
     } else {
       timer.startNew();
     }
-    setShowOverlay(false);
-  }, [timer]);
+  }, [timer, restoreWindow]);
 
   const handleDismiss = useCallback(async () => {
-    await getCurrentWindow().setFullscreen(false);
-    timer.dismissCompletion();
     setShowOverlay(false);
-  }, [timer]);
+    await restoreWindow();
+    timer.dismissCompletion();
+  }, [timer, restoreWindow]);
 
   const handleOpenSettings = useCallback(() => {
     invoke<PersistedSettings>("load_settings").then((s) => {
@@ -80,18 +90,22 @@ function App() {
     setShowSettings(true);
   }, []);
 
-  // Show overlay and enter fullscreen when timer completes
+  // Enter fullscreen when timer completes via native Rust command.
+  // The command temporarily promotes activation policy to Regular (so macOS
+  // allows fullscreen) then calls setFullscreen(true), then reverts on exit.
   const wasCompleted = useRef(timer.isCompleted);
   useEffect(() => {
     if (timer.isCompleted && !wasCompleted.current) {
       setShowOverlay(true);
-      // Sequential async calls — macOS requires each window state change
-      // to complete before the next one is issued
       (async () => {
         const win = getCurrentWindow();
         await win.show();
         await win.setFocus();
-        await win.setFullscreen(true);
+        try {
+          await invoke("enter_completion_view");
+        } catch (e) {
+          console.error("enter_completion_view failed:", e);
+        }
       })();
     }
     wasCompleted.current = timer.isCompleted;

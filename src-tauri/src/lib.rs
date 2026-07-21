@@ -12,6 +12,11 @@ pub struct AppState {
     pub timer: Mutex<timer::TimerManager>,
 }
 
+/// Stores the window's pre-fullscreen frame so exit_completion_view can restore it.
+/// macOS does not reliably restore the correct frame after set_fullscreen(false)
+/// when the window was hidden (tray) before fullscreen was entered.
+static PREV_FRAME: Mutex<Option<(i32, i32, u32, u32)>> = Mutex::new(None);
+
 #[derive(Serialize)]
 struct TimerStatus {
     remaining_seconds: i32,
@@ -71,6 +76,69 @@ fn hide_application(_app: tauri::AppHandle) {
 #[tauri::command]
 fn play_notification() {
     sound::play_notification();
+}
+
+/// Resize the window to cover the full primary monitor and float above all other
+/// windows. Works reliably regardless of macOS activation policy or fullscreen
+/// state — no animation, no policy changes, no timing races.
+#[tauri::command]
+fn enter_completion_view(app: tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    // Save current position + size so exit_completion_view can restore them.
+    if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+        *PREV_FRAME.lock().unwrap() = Some((pos.x, pos.y, size.width, size.height));
+    }
+
+    // Bring the app to the front on macOS.
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, NSObject};
+        unsafe {
+            if let Some(cls) = AnyClass::get(c"NSApplication") {
+                let ns_app: *mut NSObject = msg_send![cls, sharedApplication];
+                if !ns_app.is_null() {
+                    let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+                }
+            }
+        }
+    }
+
+    // Prefer the monitor the window is currently on; fall back to primary.
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+
+    if let Some(m) = monitor {
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_position(tauri::PhysicalPosition::new(
+            m.position().x,
+            m.position().y,
+        ));
+        let _ = window.set_size(tauri::PhysicalSize::new(
+            m.size().width,
+            m.size().height,
+        ));
+    }
+}
+
+/// Restore the window to its pre-completion frame and stop floating.
+#[tauri::command]
+fn exit_completion_view(app: tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.set_always_on_top(false);
+    let prev = PREV_FRAME.lock().unwrap().take();
+    if let Some((x, y, w, h)) = prev {
+        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        let _ = window.set_size(tauri::PhysicalSize::new(w, h));
+    }
 }
 
 #[tauri::command]
@@ -166,6 +234,8 @@ pub fn run() {
             get_timer_status,
             hide_application,
             play_notification,
+            enter_completion_view,
+            exit_completion_view,
             load_settings,
             save_settings,
             set_autostart,
